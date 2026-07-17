@@ -1,0 +1,11 @@
+diff --git a/src/nvidia/Makefile b/src/nvidia/Makefile
+index 1234567..abcdefg 100644
+--- a/src/nvidia/Makefile
++++ b/src/nvidia/Makefile
+@@ -1,6 +1,6 @@
+ # Compiler flags for nv-kernel.o_binary (system gcc)
+-CFLAGS := -fno-omit-frame-pointer -O2 $(ARCH_CFLAGS)
++CFLAGS := -g -fno-omit-frame-pointer -O2 $(ARCH_CFLAGS)
+
+ # Source files
+ NV_SOURCES := \
