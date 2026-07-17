@@ -11,84 +11,53 @@
  * Constants — NVIDIA internal ctrl2080thermal.h
  * ============================================================ */
 
-// Instruction opcodes
-define OPCODE_GET_STATUS_SENSOR_READING = 0x1500
-
-// INSTRUCTION struct: 36 bytes each
-//   [0x00] result     (NvS32)
-//   [0x04] executed   (NvU32)
-//   [0x08] opcode     (NvU32)
-//   [0x0C] operands   (union, 20 bytes)
-//     getStatusSensorReading:
-//       [0x0C] sensorIndex  (NvU32) — relative to INSTRUCTION base
-//       [0x10] value        (NvS32) — temperature in °C (signed!)
-
-// NV2080_CTRL_THERMAL_SYSTEM_EXECUTE_V2_PARAMS offsets:
-//   instructionListSize  @ 0x14
-//   instructionList[]    @ 0x18, each INSTRUCTION = 36 bytes (0x24)
-
-define INSTR_SIZE = 36
-define MAX_INSTR = 32        // instructionList[0x20]
-define OFFSET_INSTR_LIST = 24 // 0x18
-define OFFSET_INSTR_SIZE = 20 // 0x14
-
-// Sensor type labels (best-effort mapping, verify with nvidia-smi -q)
-define SENSOR_LABEL_0 = "GPU Core"
-define SENSOR_LABEL_1 = "VRAM"
-define SENSOR_LABEL_2 = "Board"
-define SENSOR_LABEL_3 = "Power Supply"
-define SENSOR_LABEL_4 = "HBM"
+#define OPCODE_GET_STATUS_SENSOR_READING 0x1500
+#define INSTR_SIZE 36
+#define MAX_INSTR 32        // instructionList[0x20]
+#define OFFSET_INSTR_LIST 24 // 0x18 — instructionList[] base offset
+#define OFFSET_INSTR_SIZE 20 // 0x14 — instructionListSize field offset
 
 /* ============================================================ */
 
-// BPF map: tid → pParams pointer (set at entry, read at exit)
-map $params : uint = uint;
-
-kprobe:nvidia:subdeviceCtrlCmdThermalSystemExecuteV2_IMPL {
-    // arg0 = pSelf, arg1 = pParams
-    $params[tid] = arg1;
+kprobe:nvidia:subdeviceCtrlCmdThermalSystemExecuteV2_IMPL
+{
+    // arg0 = pSelf, arg1 = pParams (NV2080_CTRL_THERMAL_SYSTEM_EXECUTE_V2_PARAMS*)
+    @params[tid] = arg1;
 }
 
-kretprobe:nvidia:subdeviceCtrlCmdThermalSystemExecuteV2_IMPL /@params[tid]/ {
-    // Only process successful returns (NV_OK == 0)
-    if (retval != 0) {
-        delete(@params[tid]);
-        next;
-    }
-
+kretprobe:nvidia:subdeviceCtrlCmdThermalSystemExecuteV2_IMPL
+/@params[tid] != 0/
+{
     $pParams = @params[tid];
     delete(@params[tid]);
 
-    // Read instructionListSize from pParams + OFFSET_INSTR_SIZE
-    $listSize = ($u32)($pParams + OFFSET_INSTR_SIZE);
-    if ($listSize > MAX_INSTR) $listSize = MAX_INSTR;
+    if (retval != 0) {
+        return;
+    }
 
-    // Iterate through instructionList[]
-    foreach ([$i] in $listSize /$i < $listSize/) {
-        $instrPtr = $pParams + OFFSET_INSTR_LIST + $i * INSTR_SIZE;
+    // Read instructionListSize — explicit dereference!
+    $listSize = *(uint32 *)($pParams + OFFSET_INSTR_SIZE);
+    if ($listSize > MAX_INSTR) { $listSize = MAX_INSTR; }
 
-        // Read opcode at [0x08] within INSTRUCTION
-        $opcode = ($u32)($instrPtr + 8);
+    $i = 0;
+    unroll(32) {
+        if ($i < $listSize) {
+            $instrPtr = $pParams + OFFSET_INSTR_LIST + $i * INSTR_SIZE;
 
-        if ($opcode == OPCODE_GET_STATUS_SENSOR_READING) {
-            // sensorIndex @ operands[0x0C] relative to INSTRUCTION base
-            $sensorIdx = ($u32)($instrPtr + 12);
+            // Explicit dereference for every field read:
+            $result   = *(int32  *)($instrPtr + 0);
+            $executed = *(uint32 *)($instrPtr + 4);
+            $opcode   = *(uint32 *)($instrPtr + 8);
 
-            // value (signed °C) @ operands[0x10] relative to INSTRUCTION base
-            $tempValue = ($s32)($instrPtr + 16);
+            if ($opcode == OPCODE_GET_STATUS_SENSOR_READING &&
+                $result == 0 && $executed != 0) {
 
-            // Skip zero/invalid readings
-            if ($tempValue == 0) next;
+                $sensorIdx  = *(uint32 *)($instrPtr + 12);
+                $tempValue  = *(int32  *)($instrPtr + 16);
 
-            // Build sensor label
-            $label = "Unknown";
-            if     ($sensorIdx == 0) $label = SENSOR_LABEL_0;
-            else if ($sensorIdx == 1) $label = SENSOR_LABEL_1;
-            else if ($sensorIdx == 2) $label = SENSOR_LABEL_2;
-            else if ($sensorIdx == 3) $label = SENSOR_LABEL_3;
-            else if ($sensorIdx == 4) $label = SENSOR_LABEL_4;
-
-            printf("[GPU] %s: %d °C (sensorIndex=%d)\n", $label, $tempValue, $sensorIdx);
+                printf("[tid=%d] sensorIndex=%d temp=%d C\n", tid, $sensorIdx, $tempValue);
+            }
         }
+        $i++;
     }
 }
