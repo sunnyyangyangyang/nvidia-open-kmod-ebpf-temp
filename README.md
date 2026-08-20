@@ -1,3 +1,5 @@
+not working!!!!!!!!
+
 # NVIDIA Open Kernel Module — eBPF Thermal Monitor
 
 用 eBPF kprobe/kretprobe 钩取 NVIDIA Open GPU Kernel Module 的 **VRAM 温度**和 **Hotspot 温度**。
